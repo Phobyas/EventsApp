@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { AuthProvider } from "./providers";
 import { NavBar } from "@/components/shared/nav-bar";
-import "./globals.css";
 import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
 import { cookies } from "next/headers";
+import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Eventify",

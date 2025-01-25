@@ -40,16 +40,9 @@ export function NavBar() {
                     <User className="h-5 w-5" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <div className="px-2 py-1.5 text-sm">
-                    {session.user.email}
-                  </div>
-                  <DropdownMenuSeparator />
+                <DropdownMenuContent>
                   <DropdownMenuItem onClick={() => router.push("/dashboard")}>
                     Dashboard
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => router.push("/tickets")}>
-                    My Tickets
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout}>

@@ -1,9 +1,9 @@
-import { supabaseClient } from "../utils/supabase-client";
+import { supabase } from "../utils/supabase-instance";
 
 export const auth = {
   signIn: async (email: string, password: string) => {
     try {
-      const { data, error } = await supabaseClient.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
@@ -18,5 +18,10 @@ export const auth = {
     } catch (error) {
       return { error, session: null, user: null };
     }
+  },
+
+  signOut: async () => {
+    const { error } = await supabase.auth.signOut();
+    return { error };
   },
 };
