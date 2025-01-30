@@ -5,6 +5,7 @@ import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { MapController } from "@/components/maps/MapController";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Event {
   id: string;
@@ -47,11 +48,11 @@ function EventList({
           <div
             key={event.id}
             className={`p-4 border rounded-lg bg-white cursor-pointer transition-all
-             ${
-               selectedEventId === event.id
-                 ? "border-blue-500 ring-2 ring-blue-200 shadow-lg"
-                 : "hover:bg-gray-50 hover:shadow-md"
-             }`}
+            ${
+              selectedEventId === event.id
+                ? "border-blue-500 ring-2 ring-blue-200 shadow-lg"
+                : "hover:bg-gray-50 hover:shadow-md"
+            }`}
             onClick={() =>
               onEventSelect(selectedEventId === event.id ? null : event)
             }
@@ -109,6 +110,7 @@ function EventList({
 
 export default function DashboardPage() {
   const [events, setEvents] = useState<Event[]>([]);
+  const [followedEvents, setFollowedEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [session, setSession] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -127,12 +129,29 @@ export default function DashboardPage() {
     if (!session?.user?.id) return;
 
     const fetchEvents = async () => {
-      const { data } = await supabase
+      // Fetch user's created events
+      const { data: createdEvents } = await supabase
         .from("events")
         .select("*")
         .eq("user_id", session.user.id)
         .order("date", { ascending: true });
-      if (data) setEvents(data);
+
+      if (createdEvents) setEvents(createdEvents);
+
+      // Fetch followed events
+      const { data: followedData } = await supabase
+        .from("event_follows")
+        .select(
+          `
+         event_id,
+         events (*)
+       `
+        )
+        .eq("user_id", session.user.id);
+
+      if (followedData) {
+        setFollowedEvents(followedData.map((item) => item.events));
+      }
     };
 
     fetchEvents();
@@ -170,40 +189,94 @@ export default function DashboardPage() {
     <div className="space-y-6 p-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold">Your Events</h1>
-          <p className="text-sm text-gray-600">Total events: {events.length}</p>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-sm text-gray-600">Welcome back!</p>
         </div>
         <Link href="/events/new">
           <Button>Create New Event</Button>
         </Link>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-6">
-        <EventList
-          events={events}
-          onEventSelect={handleEventSelect}
-          selectedEventId={selectedEvent?.id ?? null}
-        />
-        <div className="sticky top-6 h-[600px] bg-white rounded-lg border">
-          <MapController
-            locations={events.map((event) => ({
-              id: event.id,
-              name: event.title,
-              latitude: event.location.latitude,
-              longitude: event.location.longitude,
-              address: event.location.address,
-            }))}
-            selectedLocationId={selectedEvent?.id ?? null}
-            onLocationSelect={(location) => {
-              const event = events.find((e) => e.id === location.id);
-              handleEventSelect(event ?? null);
-            }}
-            searchQuery={searchQuery}
-            setSearchQuery={setSearchQuery}
-            interactive={false}
-          />
-        </div>
-      </div>
+      <Tabs defaultValue="my-events" className="space-y-6">
+        <TabsList className="w-full border-b">
+          <TabsTrigger value="my-events">My Events</TabsTrigger>
+          <TabsTrigger value="followed">Followed Events</TabsTrigger>
+          <TabsTrigger value="tickets">My Tickets</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="my-events">
+          <div className="grid md:grid-cols-2 gap-6">
+            <EventList
+              events={events}
+              onEventSelect={handleEventSelect}
+              selectedEventId={selectedEvent?.id ?? null}
+            />
+            <div className="sticky top-6 h-[600px] bg-white rounded-lg border">
+              <MapController
+                locations={events.map((event) => ({
+                  id: event.id,
+                  name: event.title,
+                  latitude: event.location.latitude,
+                  longitude: event.location.longitude,
+                  address: event.location.address,
+                }))}
+                selectedLocationId={selectedEvent?.id ?? null}
+                onLocationSelect={(location) => {
+                  const event = events.find((e) => e.id === location.id);
+                  handleEventSelect(event ?? null);
+                }}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                interactive={false}
+              />
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="followed">
+          <div className="grid md:grid-cols-2 gap-6">
+            <EventList
+              events={followedEvents}
+              onEventSelect={handleEventSelect}
+              selectedEventId={selectedEvent?.id ?? null}
+            />
+            <div className="sticky top-6 h-[600px] bg-white rounded-lg border">
+              <MapController
+                locations={followedEvents.map((event) => ({
+                  id: event.id,
+                  name: event.title,
+                  latitude: event.location.latitude,
+                  longitude: event.location.longitude,
+                  address: event.location.address,
+                }))}
+                selectedLocationId={selectedEvent?.id ?? null}
+                onLocationSelect={(location) => {
+                  const event = followedEvents.find(
+                    (e) => e.id === location.id
+                  );
+                  handleEventSelect(event ?? null);
+                }}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                interactive={false}
+              />
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="tickets">
+          <div className="text-center py-8">
+            <p className="text-gray-500">Your tickets will appear here soon</p>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="settings">
+          <div className="text-center py-8">
+            <p className="text-gray-500">Account settings coming soon...</p>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
