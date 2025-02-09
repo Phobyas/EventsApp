@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { MapController } from "@/components/maps/MapController";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Calendar, Clock, MapPin } from "lucide-react";
+import { useAuth } from "@/lib/hooks/useAuth";
 
 interface Event {
   id: string;
@@ -13,270 +14,223 @@ interface Event {
   description: string;
   date: string;
   time: string | null;
+  category: {
+    id: string;
+    name: string;
+  } | null;
   location: {
     address: string;
     city: string;
     country: string;
-    buildingDetails?: string;
     latitude: number;
     longitude: number;
     postalCode?: string;
+    buildingDetails?: string;
     accessInstructions?: string;
   };
-  user_id: string;
 }
 
-function EventList({
-  events,
-  onEventSelect,
-  selectedEventId,
-}: {
-  events: Event[];
-  onEventSelect: (event: Event | null) => void;
-  selectedEventId: string | null;
-}) {
-  return (
-    <div className="space-y-4">
-      {events.length === 0 ? (
-        <div className="text-center p-6 bg-white rounded-lg border">
-          <p className="text-gray-500">
-            No events yet. Create your first event!
-          </p>
-        </div>
-      ) : (
-        events.map((event) => (
-          <div
-            key={event.id}
-            className={`p-4 border rounded-lg bg-white cursor-pointer transition-all
-            ${
-              selectedEventId === event.id
-                ? "border-blue-500 ring-2 ring-blue-200 shadow-lg"
-                : "hover:bg-gray-50 hover:shadow-md"
-            }`}
-            onClick={() =>
-              onEventSelect(selectedEventId === event.id ? null : event)
-            }
-          >
-            <h3 className="font-semibold">{event.title}</h3>
-            <p className="text-sm text-gray-600">
-              {new Date(event.date).toLocaleDateString()}
-            </p>
-            <p className="text-sm">{event.location.address}</p>
+export default function EventPage({ params }: { params: { id: string } }) {
+  const [event, setEvent] = useState<Event | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isFollowed, setIsFollowed] = useState(false);
+  const { session } = useAuth();
+  const router = useRouter();
+  const supabase = createClientComponentClient();
 
-            {selectedEventId === event.id && (
-              <div className="mt-4 space-y-3 text-sm">
-                {event.description && (
-                  <p className="text-gray-700">{event.description}</p>
-                )}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="font-medium">Location:</p>
-                    <p>
-                      {event.location.city}, {event.location.country}
-                    </p>
-                    {event.location.postalCode && (
-                      <p className="text-gray-600">
-                        Postal code: {event.location.postalCode}
-                      </p>
-                    )}
-                    {event.location.buildingDetails && (
-                      <p className="text-gray-600">
-                        {event.location.buildingDetails}
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <p className="font-medium">Date & Time:</p>
-                    <p>{new Date(event.date).toLocaleDateString()}</p>
-                    <p>{event.time || "Time not specified"}</p>
-                  </div>
+  useEffect(() => {
+    const fetchEvent = async () => {
+      try {
+        const { data } = await supabase
+          .from("events")
+          .select(
+            `
+           *,
+           category:category_id (
+             id,
+             name
+           )
+         `
+          )
+          .eq("id", params.id)
+          .single();
+
+        if (data) setEvent(data);
+      } catch (error) {
+        console.error("Error fetching event:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchEvent();
+  }, [params.id]);
+
+  useEffect(() => {
+    const checkIfFollowed = async () => {
+      if (!session?.user?.id) return;
+
+      const { data } = await supabase
+        .from("event_follows")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("event_id", params.id)
+        .single();
+
+      setIsFollowed(!!data);
+    };
+
+    checkIfFollowed();
+  }, [session?.user?.id, params.id]);
+
+  const handleFollow = async () => {
+    if (!session?.user?.id) {
+      router.push("/login");
+      return;
+    }
+
+    try {
+      if (isFollowed) {
+        const { error } = await supabase
+          .from("event_follows")
+          .delete()
+          .eq("user_id", session.user.id)
+          .eq("event_id", params.id);
+
+        if (error) throw error;
+        setIsFollowed(false);
+      } else {
+        const { error } = await supabase.from("event_follows").insert([
+          {
+            user_id: session.user.id,
+            event_id: params.id,
+          },
+        ]);
+
+        if (error) throw error;
+        setIsFollowed(true);
+      }
+    } catch (error) {
+      console.error("Error:", error);
+    }
+  };
+
+  if (isLoading)
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Loading...
+      </div>
+    );
+  if (!event)
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Event not found
+      </div>
+    );
+
+  return (
+    <div className="min-h-screen">
+      <Button variant="ghost" onClick={() => router.push("/")} className="m-4">
+        <ArrowLeft className="h-4 w-4 mr-2" />
+        Back to Events
+      </Button>
+
+      <div className="container mx-auto px-4 py-8">
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="space-y-6">
+            <div>
+              <div className="flex items-start justify-between">
+                <div>
+                  <h1 className="text-4xl font-bold">{event.title}</h1>
+                  {event.category && (
+                    <span className="mt-2 inline-block px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
+                      {event.category.name}
+                    </span>
+                  )}
                 </div>
+              </div>
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center text-gray-600">
+                  <Calendar className="h-5 w-5 mr-2" />
+                  {new Date(event.date).toLocaleDateString()}
+                </div>
+                {event.time && (
+                  <div className="flex items-center text-gray-600">
+                    <Clock className="h-5 w-5 mr-2" />
+                    {event.time}
+                  </div>
+                )}
+                <div className="flex items-center text-gray-600">
+                  <MapPin className="h-5 w-5 mr-2" />
+                  {event.location.address}, {event.location.city},{" "}
+                  {event.location.country}
+                </div>
+              </div>
+            </div>
+
+            <Button onClick={handleFollow} variant="outline" className="w-full">
+              {isFollowed ? "Unfollow" : "Follow"} Event
+            </Button>
+
+            <div>
+              <h2 className="text-2xl font-semibold mb-3">About this event</h2>
+              <p className="text-gray-700 whitespace-pre-wrap">
+                {event.description}
+              </p>
+            </div>
+
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-2xl font-semibold mb-4">Tickets</h2>
+              <div className="text-center py-4">
+                <p className="text-gray-500">
+                  Tickets will be available soon...
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="h-[400px] rounded-lg overflow-hidden">
+              <MapController
+                locations={[
+                  {
+                    id: event.id,
+                    name: event.title,
+                    latitude: event.location.latitude,
+                    longitude: event.location.longitude,
+                    address: event.location.address,
+                  },
+                ]}
+                selectedLocationId={event.id}
+                interactive={false}
+              />
+            </div>
+
+            <div className="bg-white shadow rounded-lg p-6">
+              <h2 className="text-xl font-semibold mb-3">Venue Details</h2>
+              <div className="space-y-2">
+                <p className="text-lg">{event.location.address}</p>
+                <p className="text-gray-600">
+                  {event.location.city}, {event.location.country}
+                </p>
+                {event.location.buildingDetails && (
+                  <p className="text-gray-600">
+                    {event.location.buildingDetails}
+                  </p>
+                )}
                 {event.location.accessInstructions && (
-                  <div>
-                    <p className="font-medium">Access Instructions:</p>
+                  <div className="mt-4">
+                    <h3 className="font-medium">Access Instructions</h3>
                     <p className="text-gray-600">
                       {event.location.accessInstructions}
                     </p>
                   </div>
                 )}
               </div>
-            )}
+            </div>
           </div>
-        ))
-      )}
-    </div>
-  );
-}
-
-export default function DashboardPage() {
-  const [events, setEvents] = useState<Event[]>([]);
-  const [followedEvents, setFollowedEvents] = useState<Event[]>([]);
-  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
-  const [session, setSession] = useState<any>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const supabase = createClientComponentClient();
-
-  useEffect(() => {
-    const fetchSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      setSession(data.session);
-    };
-
-    fetchSession();
-  }, []);
-
-  useEffect(() => {
-    if (!session?.user?.id) return;
-
-    const fetchEvents = async () => {
-      // Fetch user's created events
-      const { data: createdEvents } = await supabase
-        .from("events")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .order("date", { ascending: true });
-
-      if (createdEvents) setEvents(createdEvents);
-
-      // Fetch followed events
-      const { data: followedData } = await supabase
-        .from("event_follows")
-        .select(
-          `
-         event_id,
-         events (*)
-       `
-        )
-        .eq("user_id", session.user.id);
-
-      if (followedData) {
-        setFollowedEvents(followedData.map((item) => item.events));
-      }
-    };
-
-    fetchEvents();
-
-    const channel = supabase
-      .channel("events")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "events",
-          filter: `user_id=eq.${session.user.id}`,
-        },
-        fetchEvents
-      )
-      .subscribe();
-
-    return () => {
-      channel.unsubscribe();
-    };
-  }, [session]);
-
-  const handleEventSelect = (event: Event | null) => {
-    setSelectedEvent(event);
-    if (event) {
-      const searchText = `${event.location.address}, ${event.location.city}, ${event.location.country}`;
-      setSearchQuery(searchText);
-    } else {
-      setSearchQuery("");
-    }
-  };
-
-  return (
-    <div className="space-y-6 p-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <p className="text-sm text-gray-600">Welcome back!</p>
         </div>
-        <Link href="/events/new">
-          <Button>Create New Event</Button>
-        </Link>
       </div>
-
-      <Tabs defaultValue="my-events" className="space-y-6">
-        <TabsList className="w-full border-b">
-          <TabsTrigger value="my-events">My Events</TabsTrigger>
-          <TabsTrigger value="followed">Followed Events</TabsTrigger>
-          <TabsTrigger value="tickets">My Tickets</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="my-events">
-          <div className="grid md:grid-cols-2 gap-6">
-            <EventList
-              events={events}
-              onEventSelect={handleEventSelect}
-              selectedEventId={selectedEvent?.id ?? null}
-            />
-            <div className="sticky top-6 h-[600px] bg-white rounded-lg border">
-              <MapController
-                locations={events.map((event) => ({
-                  id: event.id,
-                  name: event.title,
-                  latitude: event.location.latitude,
-                  longitude: event.location.longitude,
-                  address: event.location.address,
-                }))}
-                selectedLocationId={selectedEvent?.id ?? null}
-                onLocationSelect={(location) => {
-                  const event = events.find((e) => e.id === location.id);
-                  handleEventSelect(event ?? null);
-                }}
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                interactive={false}
-              />
-            </div>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="followed">
-          <div className="grid md:grid-cols-2 gap-6">
-            <EventList
-              events={followedEvents}
-              onEventSelect={handleEventSelect}
-              selectedEventId={selectedEvent?.id ?? null}
-            />
-            <div className="sticky top-6 h-[600px] bg-white rounded-lg border">
-              <MapController
-                locations={followedEvents.map((event) => ({
-                  id: event.id,
-                  name: event.title,
-                  latitude: event.location.latitude,
-                  longitude: event.location.longitude,
-                  address: event.location.address,
-                }))}
-                selectedLocationId={selectedEvent?.id ?? null}
-                onLocationSelect={(location) => {
-                  const event = followedEvents.find(
-                    (e) => e.id === location.id
-                  );
-                  handleEventSelect(event ?? null);
-                }}
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                interactive={false}
-              />
-            </div>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="tickets">
-          <div className="text-center py-8">
-            <p className="text-gray-500">Your tickets will appear here soon</p>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="settings">
-          <div className="text-center py-8">
-            <p className="text-gray-500">Account settings coming soon...</p>
-          </div>
-        </TabsContent>
-      </Tabs>
     </div>
   );
 }

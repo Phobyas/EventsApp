@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../ui/textarea";
 import { MapController } from "@/components/maps/MapController";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/config";
 import { eventService } from "@/lib/services/events";
-import { profileService } from "@/lib/services/profile"; 
+import { profileService } from "@/lib/services/profile";
 import { type NewEvent } from "@/lib/types/event";
 
 const eventSchema = z.object({
@@ -19,6 +19,7 @@ const eventSchema = z.object({
   description: z.string().optional(),
   date: z.string().min(1, "Date is required"),
   time: z.string().optional(),
+  category: z.string().min(1, "Category is required"),
   location: z.object({
     address: z.string().min(1, "Street address is required"),
     city: z.string().min(1, "City is required"),
@@ -36,6 +37,9 @@ type EventFormData = z.infer<typeof eventSchema>;
 export function EventForm() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [categories, setCategories] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
   const [selectedLocation, setSelectedLocation] = useState<{
     lat: number;
     lng: number;
@@ -51,6 +55,18 @@ export function EventForm() {
   } = useForm<EventFormData>({
     resolver: zodResolver(eventSchema),
   });
+
+  useEffect(() => {
+    const fetchCategories = async () => {
+      const { data } = await supabase
+        .from("categories")
+        .select("*")
+        .order("name");
+      if (data) setCategories(data);
+    };
+
+    fetchCategories();
+  }, []);
 
   const onSubmit = async (data: EventFormData) => {
     try {
@@ -77,6 +93,7 @@ export function EventForm() {
         description: data.description || "",
         date: data.date,
         time: data.time || null,
+        category: data.category,
         location: {
           address: data.location.address,
           city: data.location.city,
@@ -173,6 +190,26 @@ export function EventForm() {
             {errors.title && (
               <p className="text-red-500 text-sm mt-1">
                 {errors.title.message}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Category</label>
+            <select
+              {...register("category")}
+              className="w-full h-10 rounded-md border border-input bg-background px-3 py-2"
+            >
+              <option value="">Select a category</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+            {errors.category && (
+              <p className="text-red-500 text-sm mt-1">
+                {errors.category.message}
               </p>
             )}
           </div>

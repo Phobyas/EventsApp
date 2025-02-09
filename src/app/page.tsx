@@ -7,6 +7,7 @@ import {
   EventSearch,
   type SearchFilters,
 } from "@/components/search/EventSearch";
+import { EventCard } from "@/components/events/EventCard";
 
 interface Event {
   id: string;
@@ -21,7 +22,10 @@ interface Event {
     latitude: number;
     longitude: number;
   };
-  category?: string;
+  category: {
+    id: string;
+    name: string;
+  } | null;
 }
 
 export default function HomePage() {
@@ -34,7 +38,15 @@ export default function HomePage() {
     const fetchEvents = async () => {
       const { data } = await supabase
         .from("events")
-        .select("*")
+        .select(
+          `
+          *,
+          category:category_id (
+            id,
+            name
+          )
+        `
+        )
         .order("date", { ascending: true });
       if (data) {
         setEvents(data);
@@ -79,7 +91,7 @@ export default function HomePage() {
     // Filter by category
     if (filters.category) {
       filtered = filtered.filter(
-        (event) => event.category === filters.category
+        (event) => event.category?.id === filters.category
       );
     }
 
@@ -109,32 +121,16 @@ export default function HomePage() {
             </h2>
             <div className="space-y-4">
               {filteredEvents.map((event) => (
-                <div
+                <EventCard
                   key={event.id}
-                  className={`border rounded-lg p-4 cursor-pointer transition-all
-                    ${selectedEvent?.id === event.id ? "ring-2 ring-blue-500" : "hover:shadow-md"}`}
+                  event={event}
+                  isSelected={selectedEvent?.id === event.id}
                   onClick={() =>
                     setSelectedEvent(
                       selectedEvent?.id === event.id ? null : event
                     )
                   }
-                >
-                  <h3 className="font-semibold">{event.title}</h3>
-                  <p className="text-sm text-gray-600">
-                    {new Date(event.date).toLocaleDateString()}
-                  </p>
-                  <div className="mt-2 text-sm text-gray-500">
-                    <p>
-                      {event.location.city}, {event.location.country}
-                    </p>
-                    <p>{event.location.address}</p>
-                  </div>
-                  {event.category && (
-                    <span className="mt-2 inline-block px-2 py-1 text-xs bg-gray-100 rounded-full">
-                      {event.category}
-                    </span>
-                  )}
-                </div>
+                />
               ))}
             </div>
           </div>

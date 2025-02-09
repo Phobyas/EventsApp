@@ -57,11 +57,14 @@ function EventList({
               onEventSelect(selectedEventId === event.id ? null : event)
             }
           >
-            <h3 className="font-semibold">{event.title}</h3>
-            <p className="text-sm text-gray-600">
-              {new Date(event.date).toLocaleDateString()}
-            </p>
-            <p className="text-sm">{event.location.address}</p>
+            <div className="flex justify-between items-start">
+              <h3 className="font-semibold">{event.title}</h3>
+              {event.category && (
+                <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
+                  {event.category}
+                </span>
+              )}
+            </div>
 
             {selectedEventId === event.id && (
               <div className="mt-4 space-y-3 text-sm">
