@@ -9,10 +9,16 @@ import { Textarea } from "../ui/textarea";
 import { MapController } from "@/components/maps/MapController";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase/config";
-import { eventService } from "@/lib/services/events";
-import { profileService } from "@/lib/services/profile";
-import { type NewEvent } from "@/lib/types/event";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { Trash2 } from "lucide-react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 const eventSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters"),
@@ -30,12 +36,30 @@ const eventSchema = z.object({
     longitude: z.number(),
     accessInstructions: z.string().optional(),
   }),
+  ticketTypes: z
+    .array(
+      z.object({
+        name: z.string().min(1, "Ticket name is required"),
+        description: z.string().optional(),
+        price: z.number().min(0, "Price must be 0 or greater"),
+        quantity: z.number().min(1, "Quantity must be at least 1"),
+      })
+    )
+    .min(1, "At least one ticket type is required"),
 });
 
 type EventFormData = z.infer<typeof eventSchema>;
 
+interface TicketType {
+  name: string;
+  description: string;
+  price: number;
+  quantity: number;
+}
+
 export function EventForm() {
   const router = useRouter();
+  const supabase = createClientComponentClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [categories, setCategories] = useState<
     Array<{ id: string; name: string }>
@@ -54,6 +78,9 @@ export function EventForm() {
     formState: { errors },
   } = useForm<EventFormData>({
     resolver: zodResolver(eventSchema),
+    defaultValues: {
+      ticketTypes: [{ name: "", description: "", price: 0, quantity: 1 }],
+    },
   });
 
   useEffect(() => {
@@ -64,16 +91,33 @@ export function EventForm() {
         .order("name");
       if (data) setCategories(data);
     };
-
     fetchCategories();
   }, []);
+
+  const addTicketType = () => {
+    const currentTickets = watch("ticketTypes") || [];
+    setValue("ticketTypes", [
+      ...currentTickets,
+      { name: "", description: "", price: 0, quantity: 1 },
+    ]);
+  };
+
+  const removeTicketType = (index: number) => {
+    const currentTickets = watch("ticketTypes") || [];
+    if (currentTickets.length > 1) {
+      setValue(
+        "ticketTypes",
+        currentTickets.filter((_, i) => i !== index)
+      );
+    }
+  };
 
   const onSubmit = async (data: EventFormData) => {
     try {
       setIsSubmitting(true);
-
       const { data: session } = await supabase.auth.getSession();
-      if (!session?.session?.user?.id) {
+
+      if (!session?.user?.id) {
         throw new Error("Not authenticated");
       }
 
@@ -81,34 +125,55 @@ export function EventForm() {
       const { data: existingProfile } = await supabase
         .from("profiles")
         .select()
-        .eq("id", session.session.user.id)
+        .eq("id", session.user.id)
         .single();
 
       if (!existingProfile) {
-        await profileService.createProfile(session.session.user.id);
+        await supabase.from("profiles").insert([{ id: session.user.id }]);
       }
 
-      const eventData: NewEvent = {
-        title: data.title,
-        description: data.description || "",
-        date: data.date,
-        time: data.time || null,
-        category: data.category,
-        location: {
-          address: data.location.address,
-          city: data.location.city,
-          country: data.location.country,
-          postalCode: data.location.postalCode || "",
-          buildingDetails: data.location.buildingDetails || "",
-          latitude: data.location.latitude,
-          longitude: data.location.longitude,
-          accessInstructions: data.location.accessInstructions || "",
-        },
-      };
+      // Create event
+      const { data: newEvent, error: eventError } = await supabase
+        .from("events")
+        .insert([
+          {
+            title: data.title,
+            description: data.description || "",
+            date: data.date,
+            time: data.time || null,
+            category_id: data.category,
+            location: {
+              address: data.location.address,
+              city: data.location.city,
+              country: data.location.country,
+              postalCode: data.location.postalCode || "",
+              buildingDetails: data.location.buildingDetails || "",
+              latitude: data.location.latitude,
+              longitude: data.location.longitude,
+              accessInstructions: data.location.accessInstructions || "",
+            },
+            user_id: session.user.id,
+          },
+        ])
+        .select()
+        .single();
 
-      await eventService.createEvent(eventData, session.session.user.id);
+      if (eventError) throw eventError;
 
-      alert("Event created successfully!");
+      // Create ticket types
+      const ticketTypePromises = data.ticketTypes.map((ticket) =>
+        supabase.from("ticket_types").insert({
+          event_id: newEvent.id,
+          name: ticket.name,
+          description: ticket.description || "",
+          price: ticket.price,
+          total_quantity: ticket.quantity,
+          remaining_quantity: ticket.quantity,
+        })
+      );
+
+      await Promise.all(ticketTypePromises);
+
       router.push("/dashboard");
     } catch (error) {
       console.error("Error submitting form:", error);
@@ -139,7 +204,6 @@ export function EventForm() {
       if (data.features && data.features.length > 0) {
         const feature = data.features[0];
         const context = feature.context || [];
-
         const streetAddress = feature.text || "";
         const houseNumber = feature.address || "";
         const city =
@@ -156,15 +220,6 @@ export function EventForm() {
         setValue("location.city", city);
         setValue("location.country", country);
         setValue("location.postalCode", postcode);
-
-        console.log("Location details:", {
-          address: houseNumber
-            ? `${houseNumber} ${streetAddress}`
-            : streetAddress,
-          city,
-          country,
-          postcode,
-        });
       }
     } catch (error) {
       console.error("Error fetching address details:", error);
@@ -174,186 +229,317 @@ export function EventForm() {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Event Details Section */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Event Details</h2>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Event Title
-            </label>
-            <Input
-              placeholder="Event Title"
-              {...register("title")}
-              className={errors.title ? "border-red-500" : ""}
-            />
-            {errors.title && (
-              <p className="text-red-500 text-sm mt-1">
-                {errors.title.message}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">Category</label>
-            <select
-              {...register("category")}
-              className="w-full h-10 rounded-md border border-input bg-background px-3 py-2"
-            >
-              <option value="">Select a category</option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-            {errors.category && (
-              <p className="text-red-500 text-sm mt-1">
-                {errors.category.message}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Description
-            </label>
-            <Textarea
-              placeholder="Event Description"
-              {...register("description")}
-              className="min-h-[100px]"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Date</label>
-              <Input type="date" {...register("date")} />
-              {errors.date && (
-                <p className="text-red-500 text-sm mt-1">
-                  {errors.date.message}
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Time</label>
-              <Input type="time" {...register("time")} />
-            </div>
-          </div>
-
-          {/* Location Details */}
-          <div className="space-y-4 pt-4">
-            <h3 className="text-lg font-medium">Location Details</h3>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Street Address
-              </label>
-              <Input
-                {...register("location.address")}
-                placeholder="Street address"
-                className={errors.location?.address ? "border-red-500" : ""}
-              />
-              {errors.location?.address && (
-                <p className="text-red-500 text-sm mt-1">
-                  {errors.location.address.message}
-                </p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+        {/* Left Column */}
+        <div className="space-y-6">
+          {/* Event Details Section */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Event Details</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-1">City</label>
+                <label className="block text-sm font-medium mb-1">
+                  Event Title
+                </label>
                 <Input
-                  {...register("location.city")}
-                  placeholder="City"
-                  className={errors.location?.city ? "border-red-500" : ""}
+                  placeholder="Event Title"
+                  {...register("title")}
+                  className={errors.title ? "border-red-500" : ""}
                 />
-                {errors.location?.city && (
+                {errors.title && (
                   <p className="text-red-500 text-sm mt-1">
-                    {errors.location.city.message}
+                    {errors.title.message}
                   </p>
                 )}
               </div>
+
               <div>
                 <label className="block text-sm font-medium mb-1">
-                  Postal Code
+                  Category
                 </label>
-                <Input
-                  {...register("location.postalCode")}
-                  placeholder="Postal code"
+                <select
+                  {...register("category")}
+                  className="w-full h-10 rounded-md border border-input bg-background px-3 py-2"
+                >
+                  <option value="">Select a category</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                {errors.category && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.category.message}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Description
+                </label>
+                <Textarea
+                  placeholder="Event Description"
+                  {...register("description")}
+                  className="min-h-[100px]"
                 />
               </div>
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-1">Country</label>
-              <Input
-                {...register("location.country")}
-                placeholder="Country"
-                className={errors.location?.country ? "border-red-500" : ""}
-              />
-              {errors.location?.country && (
-                <p className="text-red-500 text-sm mt-1">
-                  {errors.location.country.message}
-                </p>
-              )}
-            </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Date</label>
+                  <Input type="date" {...register("date")} />
+                  {errors.date && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.date.message}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Time</label>
+                  <Input type="time" {...register("time")} />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Building Details (Optional)
-              </label>
-              <Input
-                {...register("location.buildingDetails")}
-                placeholder="Floor, Suite, Building name, etc."
-              />
-            </div>
+          {/* Location Details Section */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Location Details</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Street Address
+                </label>
+                <Input
+                  {...register("location.address")}
+                  placeholder="Street address"
+                  className={errors.location?.address ? "border-red-500" : ""}
+                />
+                {errors.location?.address && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.location.address.message}
+                  </p>
+                )}
+              </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Access Instructions (Optional)
-              </label>
-              <Textarea
-                {...register("location.accessInstructions")}
-                placeholder="Instructions for finding the location, parking details, etc."
-                className="min-h-[80px]"
-              />
-            </div>
-          </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">City</label>
+                  <Input
+                    {...register("location.city")}
+                    placeholder="City"
+                    className={errors.location?.city ? "border-red-500" : ""}
+                  />
+                  {errors.location?.city && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.location.city.message}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Postal Code
+                  </label>
+                  <Input
+                    {...register("location.postalCode")}
+                    placeholder="Postal code"
+                  />
+                </div>
+              </div>
 
-          <Button type="submit" disabled={isSubmitting} className="w-full mt-6">
-            {isSubmitting ? "Creating..." : "Create Event"}
-          </Button>
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Country
+                </label>
+                <Input
+                  {...register("location.country")}
+                  placeholder="Country"
+                  className={errors.location?.country ? "border-red-500" : ""}
+                />
+                {errors.location?.country && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.location.country.message}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Building Details (Optional)
+                </label>
+                <Input
+                  {...register("location.buildingDetails")}
+                  placeholder="Floor, Suite, Building name, etc."
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Access Instructions (Optional)
+                </label>
+                <Textarea
+                  {...register("location.accessInstructions")}
+                  placeholder="Instructions for finding the location, parking details, etc."
+                  className="min-h-[80px]"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Ticket Types Section */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Ticket Types</CardTitle>
+              <CardDescription>
+                Create at least one ticket type for your event
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {watch("ticketTypes")?.map((_, index) => (
+                <div key={index} className="p-4 border rounded-lg space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-medium">Ticket Type {index + 1}</h4>
+                    {watch("ticketTypes").length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeTicketType(index)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Input
+                      placeholder="Ticket Name"
+                      {...register(`ticketTypes.${index}.name`)}
+                      className={
+                        errors.ticketTypes?.[index]?.name
+                          ? "border-red-500"
+                          : ""
+                      }
+                    />
+                    {errors.ticketTypes?.[index]?.name && (
+                      <p className="text-red-500 text-sm">
+                        {errors.ticketTypes[index]?.name?.message}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Textarea
+                      placeholder="Ticket Description"
+                      {...register(`ticketTypes.${index}.description`)}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Price"
+                        {...register(`ticketTypes.${index}.price`, {
+                          valueAsNumber: true,
+                        })}
+                        className={
+                          errors.ticketTypes?.[index]?.price
+                            ? "border-red-500"
+                            : ""
+                        }
+                      />
+                      {errors.ticketTypes?.[index]?.price && (
+                        <p className="text-red-500 text-sm">
+                          {errors.ticketTypes[index]?.price?.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="Quantity"
+                        {...register(`ticketTypes.${index}.quantity`, {
+                          valueAsNumber: true,
+                        })}
+                        className={
+                          errors.ticketTypes?.[index]?.quantity
+                            ? "border-red-500"
+                            : ""
+                        }
+                      />
+                      {errors.ticketTypes?.[index]?.quantity && (
+                        <p className="text-red-500 text-sm">
+                          {errors.ticketTypes[index]?.quantity?.message}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addTicketType}
+                className="w-full"
+              >
+                Add Ticket Type
+              </Button>
+            </CardContent>
+            <CardFooter>
+              <Button type="submit" disabled={isSubmitting} className="w-full">
+                {isSubmitting ? "Creating..." : "Create Event"}
+              </Button>
+            </CardFooter>
+          </Card>
         </div>
 
-        {/* Map Section */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Select Location on Map</h2>
-          <p className="text-sm text-gray-600 mb-4">
-            Search for a location or click on the map to set the event location
-          </p>
-          <MapController
-            onLocationSelect={handleLocationSelect}
-            locations={
-              selectedLocation
-                ? [
-                    {
-                      id: "new",
-                      name: "Selected Location",
-                      latitude: selectedLocation.lat,
-                      longitude: selectedLocation.lng,
-                      address: selectedLocation.address,
-                    },
-                  ]
-                : []
-            }
-          />
-          {errors.location && !selectedLocation && (
-            <p className="text-red-500 text-sm">
-              Please select a location on the map
-            </p>
-          )}
+        {/* Right Column - Map Section */}
+        <div>
+          <Card className="sticky top-4">
+            <CardHeader>
+              <CardTitle>Select Location on Map</CardTitle>
+              <CardDescription>
+                Search for a location or click on the map to set the event
+                location
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[600px]">
+                <MapController
+                  onLocationSelect={handleLocationSelect}
+                  locations={
+                    selectedLocation
+                      ? [
+                          {
+                            id: "new",
+                            name: "Selected Location",
+                            latitude: selectedLocation.lat,
+                            longitude: selectedLocation.lng,
+                            address: selectedLocation.address,
+                          },
+                        ]
+                      : []
+                  }
+                  interactive={true}
+                />
+              </div>
+              {errors.location && !selectedLocation && (
+                <p className="text-red-500 text-sm mt-2">
+                  Please select a location on the map
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
     </form>
