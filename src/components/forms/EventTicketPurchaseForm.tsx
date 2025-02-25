@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { createClientComponentClient } from "@supabase/supabase-js";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { useRouter } from "next/navigation";
 import {
   Card,
@@ -38,8 +38,20 @@ export function EventTicketPurchaseForm({
   );
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debug, setDebug] = useState<{ visible: boolean; messages: string[] }>({
+    visible: false,
+    messages: [],
+  });
   const router = useRouter();
   const supabase = createClientComponentClient();
+
+  const addDebugMessage = (message: string) => {
+    setDebug((prev) => ({
+      ...prev,
+      messages: [...prev.messages, `${new Date().toISOString()}: ${message}`],
+    }));
+    console.log(`[TicketPurchase Debug] ${message}`);
+  };
 
   const handleQuantityChange = (ticketId: string, value: string) => {
     const quantity = parseInt(value) || 0;
@@ -58,80 +70,120 @@ export function EventTicketPurchaseForm({
 
   const calculateTotal = () => {
     const subtotal = calculateSubtotal();
-    // You could add service fee calculation here
     return subtotal;
-  };
-
-  const generateTicketId = () => {
-    return "TKT-" + Math.random().toString(36).substr(2, 9).toUpperCase();
   };
 
   const handlePurchase = async () => {
     try {
       setIsProcessing(true);
       setError(null);
+      addDebugMessage("Starting ticket purchase process");
 
       // Check authentication
       const {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session?.user) {
+        addDebugMessage("No authenticated user found");
         router.push("/login");
         return;
       }
 
-      // Start database transaction
-      const purchaseTickets = ticketTypes.flatMap((ticket) => {
-        const quantity = quantities[ticket.id] || 0;
-        if (quantity === 0) return [];
+      addDebugMessage(`User authenticated: ${session.user.id}`);
 
-        return Array(quantity)
-          .fill(null)
-          .map(() => ({
-            ticket_id: generateTicketId(),
-            event_id: eventId,
-            ticket_type_id: ticket.id,
-            user_id: session.user.id,
-            purchase_date: new Date().toISOString(),
-            status: "active",
-            price_paid: ticket.price,
-          }));
-      });
+      // Prepare ticket purchases
+      const selectedTickets = ticketTypes.filter(
+        (ticket) => quantities[ticket.id] > 0
+      );
 
-      if (purchaseTickets.length === 0) {
+      if (selectedTickets.length === 0) {
         setError("Please select at least one ticket");
+        addDebugMessage("No tickets selected");
         return;
       }
 
-      // Insert ticket purchases
-      const { error: purchaseError } = await supabase
-        .from("tickets")
-        .insert(purchaseTickets);
+      addDebugMessage(`Selected ${selectedTickets.length} ticket types`);
 
-      if (purchaseError) throw purchaseError;
+      // Create orders for each ticket type
+      for (const ticket of selectedTickets) {
+        const quantity = quantities[ticket.id];
+        const ticketTotal = ticket.price * quantity;
 
-      // Update remaining quantities
-      for (const ticket of ticketTypes) {
-        const quantityPurchased = quantities[ticket.id] || 0;
-        if (quantityPurchased > 0) {
-          const { error: updateError } = await supabase
-            .from("ticket_types")
-            .update({
-              remaining_quantity: ticket.remaining_quantity - quantityPurchased,
-            })
-            .eq("id", ticket.id);
+        addDebugMessage(
+          `Creating order for ticket type ${ticket.id}: ${quantity} x $${ticket.price} = $${ticketTotal}`
+        );
 
-          if (updateError) throw updateError;
+        // Create order
+        const { data: orderData, error: orderError } = await supabase
+          .from("orders")
+          .insert({
+            user_id: session.user.id,
+            ticket_type_id: ticket.id,
+            quantity: quantity,
+            total_amount: ticketTotal,
+            status: "completed",
+          })
+          .select()
+          .single();
+
+        if (orderError) {
+          addDebugMessage(`Order creation error: ${orderError.message}`);
+          throw orderError;
+        }
+
+        if (!orderData) {
+          addDebugMessage("Order created but no data returned");
+          throw new Error("Failed to create order");
+        }
+
+        addDebugMessage(`Order created with ID: ${orderData.id}`);
+
+        // Create individual tickets with absolute minimal fields
+        addDebugMessage(`Creating ${quantity} individual tickets`);
+
+        for (let i = 0; i < quantity; i++) {
+          // Create tickets one by one to isolate issues
+          const { error: ticketError } = await supabase.from("tickets").insert({
+            order_id: orderData.id,
+            ticket_type_id: ticket.id,
+            user_id: session.user.id, // Link ticket to user
+          });
+
+          if (ticketError) {
+            addDebugMessage(`Ticket creation error: ${ticketError.message}`);
+            throw ticketError;
+          }
+        }
+
+        // Update remaining quantity
+        const { error: updateError } = await supabase
+          .from("ticket_types")
+          .update({
+            remaining_quantity: ticket.remaining_quantity - quantity,
+          })
+          .eq("id", ticket.id);
+
+        if (updateError) {
+          addDebugMessage(
+            `Error updating quantity for ticket type ${ticket.id}: ${updateError.message}`
+          );
         }
       }
+
+      addDebugMessage("All purchases completed successfully");
 
       // Reset form and notify completion
       setQuantities(Object.fromEntries(ticketTypes.map((t) => [t.id, 0])));
       onPurchaseComplete?.();
-      router.push("/tickets");
+
+      alert("Tickets purchased successfully!");
+      router.push("/dashboard?tab=tickets");
     } catch (err) {
       console.error("Purchase error:", err);
-      setError("Failed to complete purchase. Please try again.");
+      const errorMessage =
+        err instanceof Error ? err.message : "An unknown error occurred";
+      addDebugMessage(`Purchase error: ${errorMessage}`);
+      setError(`Failed to complete purchase: ${errorMessage}`);
     } finally {
       setIsProcessing(false);
     }
@@ -185,7 +237,6 @@ export function EventTicketPurchaseForm({
             <span className="text-gray-600">Subtotal</span>
             <span>${calculateSubtotal().toFixed(2)}</span>
           </div>
-          {/* Add service fees here if needed */}
           <div className="flex justify-between items-center text-lg font-semibold">
             <span>Total</span>
             <span>${calculateTotal().toFixed(2)}</span>
@@ -195,7 +246,7 @@ export function EventTicketPurchaseForm({
         {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
       </CardContent>
 
-      <CardFooter className="bg-gray-50">
+      <CardFooter className="flex-col">
         <Button
           className="w-full"
           disabled={!hasSelectedTickets || isProcessing}
@@ -203,6 +254,31 @@ export function EventTicketPurchaseForm({
         >
           {isProcessing ? "Processing..." : "Purchase Tickets"}
         </Button>
+
+        {/* Debug toggle */}
+        <div className="w-full mt-4">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setDebug((prev) => ({ ...prev, visible: !prev.visible }))
+            }
+            className="text-xs"
+          >
+            {debug.visible ? "Hide Debug Info" : "Show Debug Info"}
+          </Button>
+
+          {debug.visible && debug.messages.length > 0 && (
+            <div className="mt-2 p-2 bg-gray-100 rounded text-xs font-mono overflow-auto max-h-40">
+              {debug.messages.map((msg, i) => (
+                <div key={i} className="mb-1">
+                  {msg}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </CardFooter>
     </Card>
   );

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { MapController } from "@/components/maps/MapController";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MyTickets } from "@/components/ui/myTickets";
 
 interface Event {
   id: string;
@@ -269,9 +270,7 @@ export default function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="tickets">
-          <div className="text-center py-8">
-            <p className="text-gray-500">Your tickets will appear here soon</p>
-          </div>
+          <MyTickets />
         </TabsContent>
 
         <TabsContent value="settings">

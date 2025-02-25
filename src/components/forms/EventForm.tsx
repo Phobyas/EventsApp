@@ -61,6 +61,13 @@ export function EventForm() {
   const router = useRouter();
   const supabase = createClientComponentClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<{
+    visible: boolean;
+    messages: string[];
+  }>({
+    visible: false,
+    messages: [],
+  });
   const [categories, setCategories] = useState<
     Array<{ id: string; name: string }>
   >([]);
@@ -83,14 +90,39 @@ export function EventForm() {
     },
   });
 
+  const addDebugMessage = (message: string) => {
+    setDebugInfo((prev) => ({
+      ...prev,
+      messages: [...prev.messages, `${new Date().toISOString()}: ${message}`],
+    }));
+    console.log(`[EventForm Debug] ${message}`);
+  };
+
   useEffect(() => {
     const fetchCategories = async () => {
-      const { data } = await supabase
-        .from("categories")
-        .select("*")
-        .order("name");
-      if (data) setCategories(data);
+      try {
+        addDebugMessage("Fetching categories");
+        const { data, error } = await supabase
+          .from("categories")
+          .select("*")
+          .order("name");
+
+        if (error) {
+          addDebugMessage(`Error fetching categories: ${error.message}`);
+          return;
+        }
+
+        if (data) {
+          setCategories(data);
+          addDebugMessage(`Loaded ${data.length} categories`);
+        }
+      } catch (err) {
+        addDebugMessage(
+          `Exception fetching categories: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     };
+
     fetchCategories();
   }, []);
 
@@ -113,74 +145,161 @@ export function EventForm() {
   };
 
   const onSubmit = async (data: EventFormData) => {
+    addDebugMessage("Form submission started");
+    addDebugMessage(
+      `Form data: ${JSON.stringify({
+        title: data.title,
+        category: data.category,
+        ticketCount: data.ticketTypes.length,
+      })}`
+    );
+
     try {
       setIsSubmitting(true);
-      const { data: session } = await supabase.auth.getSession();
 
-      if (!session?.user?.id) {
+      // Check authentication
+      addDebugMessage("Checking authentication");
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        addDebugMessage(`Authentication error: ${sessionError.message}`);
+        throw new Error(`Authentication failed: ${sessionError.message}`);
+      }
+
+      if (!sessionData?.session?.user?.id) {
+        addDebugMessage("No authenticated user found");
         throw new Error("Not authenticated");
       }
 
+      const userId = sessionData.session.user.id;
+      addDebugMessage(`User authenticated: ${userId}`);
+
       // Check if profile exists, if not create it
-      const { data: existingProfile } = await supabase
+      addDebugMessage("Checking user profile");
+      const { data: existingProfile, error: profileError } = await supabase
         .from("profiles")
         .select()
-        .eq("id", session.user.id)
+        .eq("id", userId)
         .single();
 
-      if (!existingProfile) {
-        await supabase.from("profiles").insert([{ id: session.user.id }]);
+      if (profileError && profileError.code !== "PGRST116") {
+        // Not found error
+        addDebugMessage(`Profile check error: ${profileError.message}`);
+        throw profileError;
       }
 
+      if (!existingProfile) {
+        addDebugMessage("Creating user profile");
+        const { error: createProfileError } = await supabase
+          .from("profiles")
+          .insert([{ id: userId }]);
+
+        if (createProfileError) {
+          addDebugMessage(
+            `Profile creation error: ${createProfileError.message}`
+          );
+          throw createProfileError;
+        }
+      }
+
+      // Prepare event data
+      addDebugMessage("Preparing event data");
+      const eventData = {
+        title: data.title,
+        description: data.description || "",
+        date: data.date,
+        time: data.time || null,
+        category_id: data.category,
+        location: {
+          address: data.location.address,
+          city: data.location.city,
+          country: data.location.country,
+          postalCode: data.location.postalCode || "",
+          buildingDetails: data.location.buildingDetails || "",
+          latitude: data.location.latitude,
+          longitude: data.location.longitude,
+          accessInstructions: data.location.accessInstructions || "",
+        },
+        user_id: userId,
+      };
+
+      addDebugMessage(
+        `Event data prepared: ${JSON.stringify({
+          title: eventData.title,
+          date: eventData.date,
+          category_id: eventData.category_id,
+        })}`
+      );
+
       // Create event
+      addDebugMessage("Creating event in database");
       const { data: newEvent, error: eventError } = await supabase
         .from("events")
-        .insert([
-          {
-            title: data.title,
-            description: data.description || "",
-            date: data.date,
-            time: data.time || null,
-            category_id: data.category,
-            location: {
-              address: data.location.address,
-              city: data.location.city,
-              country: data.location.country,
-              postalCode: data.location.postalCode || "",
-              buildingDetails: data.location.buildingDetails || "",
-              latitude: data.location.latitude,
-              longitude: data.location.longitude,
-              accessInstructions: data.location.accessInstructions || "",
-            },
-            user_id: session.user.id,
-          },
-        ])
+        .insert([eventData])
         .select()
         .single();
 
-      if (eventError) throw eventError;
+      if (eventError) {
+        addDebugMessage(`Event creation error: ${eventError.message}`);
+        throw eventError;
+      }
+
+      if (!newEvent || !newEvent.id) {
+        addDebugMessage("Event created but no ID returned");
+        throw new Error("Failed to get created event ID");
+      }
+
+      addDebugMessage(`Event created with ID: ${newEvent.id}`);
 
       // Create ticket types
-      const ticketTypePromises = data.ticketTypes.map((ticket) =>
-        supabase.from("ticket_types").insert({
+      addDebugMessage(`Creating ${data.ticketTypes.length} ticket types`);
+      const ticketTypePromises = data.ticketTypes.map((ticket, index) => {
+        addDebugMessage(`Preparing ticket type ${index + 1}: ${ticket.name}`);
+        return supabase.from("ticket_types").insert({
           event_id: newEvent.id,
           name: ticket.name,
           description: ticket.description || "",
           price: ticket.price,
-          total_quantity: ticket.quantity,
+          quantity: ticket.quantity, // Use 'quantity' as in your schema
           remaining_quantity: ticket.quantity,
-        })
-      );
+        });
+      });
 
-      await Promise.all(ticketTypePromises);
+      const ticketResults = await Promise.all(ticketTypePromises);
 
+      // Check for ticket creation errors
+      const ticketErrors = ticketResults
+        .map((result, index) =>
+          result.error
+            ? `Ticket ${index + 1} (${data.ticketTypes[index].name}): ${result.error.message}`
+            : null
+        )
+        .filter((error) => error !== null);
+
+      if (ticketErrors.length > 0) {
+        addDebugMessage(`Errors creating tickets: ${ticketErrors.join("; ")}`);
+        throw new Error(
+          `Failed to create some ticket types: ${ticketErrors.join("; ")}`
+        );
+      }
+
+      addDebugMessage("All ticket types created successfully");
+      addDebugMessage("Event creation completed successfully");
+
+      // Success - redirect
+      alert("Event created successfully!");
       router.push("/dashboard");
     } catch (error) {
       console.error("Error submitting form:", error);
-      alert(
-        "Error creating event: " +
-          (error instanceof Error ? error.message : "Unknown error")
+      addDebugMessage(
+        `Submission error: ${error instanceof Error ? error.message : String(error)}`
       );
+
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error occurred";
+
+      alert(`Error creating event: ${errorMessage}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -495,10 +614,38 @@ export function EventForm() {
                 Add Ticket Type
               </Button>
             </CardContent>
-            <CardFooter>
+            <CardFooter className="flex-col items-start">
               <Button type="submit" disabled={isSubmitting} className="w-full">
                 {isSubmitting ? "Creating..." : "Create Event"}
               </Button>
+
+              {/* Debug toggle */}
+              <div className="w-full mt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setDebugInfo((prev) => ({
+                      ...prev,
+                      visible: !prev.visible,
+                    }))
+                  }
+                  className="text-xs"
+                >
+                  {debugInfo.visible ? "Hide Debug Info" : "Show Debug Info"}
+                </Button>
+
+                {debugInfo.visible && debugInfo.messages.length > 0 && (
+                  <div className="mt-2 p-2 bg-gray-100 rounded text-xs font-mono overflow-auto max-h-40">
+                    {debugInfo.messages.map((msg, i) => (
+                      <div key={i} className="mb-1">
+                        {msg}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </CardFooter>
           </Card>
         </div>
