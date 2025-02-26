@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import QRCode from "react-qr-code";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 import {
   Calendar,
   Clock,
@@ -66,6 +69,7 @@ export default function TicketDetailPage({
   });
   const router = useRouter();
   const supabase = createClientComponentClient();
+  const ticketRef = useRef<HTMLDivElement>(null);
 
   const addDebugMessage = (message: string) => {
     setDebug((prev) => ({
@@ -73,6 +77,278 @@ export default function TicketDetailPage({
       messages: [...prev.messages, `${new Date().toISOString()}: ${message}`],
     }));
     console.log(`[TicketDetail Debug] ${message}`);
+  };
+
+  // Replace the handleDownloadPDF function with this improved version
+
+  const handleDownloadPDF = async () => {
+    if (!ticket) return;
+
+    try {
+      // Create loading state
+      const downloadButton = document.getElementById("download-button");
+      if (downloadButton) {
+        downloadButton.innerHTML =
+          '<span class="animate-spin inline-block mr-2">↻</span> Generating PDF...';
+        downloadButton.setAttribute("disabled", "true");
+      }
+
+      // Create the PDF document (A4 size)
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+
+      // Set up constants for positioning
+      const pageWidth = 210; // A4 width in mm
+      const leftMargin = 15;
+      const rightMargin = pageWidth - 15;
+      const topMargin = 15;
+      let yPosition = topMargin;
+
+      // Add title with logo
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(24);
+      pdf.setTextColor(65, 105, 225); // Blue color for title
+      pdf.text("EVENT TICKET", leftMargin, yPosition);
+      yPosition += 15;
+
+      // Event details section
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(ticket.event.title, leftMargin, yPosition);
+      yPosition += 10;
+
+      // Date and time
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(12);
+      pdf.setTextColor(80, 80, 80);
+      const dateText = `Date: ${new Date(ticket.event.date).toLocaleDateString()}`;
+      const timeText = ticket.event.time
+        ? `Time: ${ticket.event.time}`
+        : "Time: Not specified";
+      pdf.text(dateText, leftMargin, yPosition);
+      yPosition += 6;
+      pdf.text(timeText, leftMargin, yPosition);
+      yPosition += 10;
+
+      // Location
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(12);
+      pdf.text("Location:", leftMargin, yPosition);
+      yPosition += 6;
+
+      pdf.setFont("helvetica", "normal");
+      pdf.text(ticket.event.location.address, leftMargin, yPosition);
+      yPosition += 6;
+
+      const locationText = `${ticket.event.location.city}, ${ticket.event.location.country}`;
+      pdf.text(locationText, leftMargin, yPosition);
+      yPosition += 6;
+
+      if (ticket.event.location.postalCode) {
+        pdf.text(
+          `Postal Code: ${ticket.event.location.postalCode}`,
+          leftMargin,
+          yPosition
+        );
+        yPosition += 6;
+      }
+
+      if (ticket.event.location.buildingDetails) {
+        pdf.text(
+          `Building Details: ${ticket.event.location.buildingDetails}`,
+          leftMargin,
+          yPosition
+        );
+        yPosition += 6;
+      }
+
+      yPosition += 10;
+
+      // Add a divider line
+      pdf.setDrawColor(200, 200, 200);
+      pdf.line(leftMargin, yPosition, rightMargin, yPosition);
+      yPosition += 10;
+
+      // Ticket details section
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(14);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text("Ticket Information", leftMargin, yPosition);
+      yPosition += 10;
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(12);
+
+      // Ticket type
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Ticket Type:", leftMargin, yPosition);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(
+        ticket.ticket_types?.name || "General Admission",
+        leftMargin + 30,
+        yPosition
+      );
+      yPosition += 6;
+
+      // Ticket price
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Price:", leftMargin, yPosition);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(
+        `$${ticket.ticket_types?.price.toFixed(2) || "0.00"}`,
+        leftMargin + 30,
+        yPosition
+      );
+      yPosition += 6;
+
+      // Order ID
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Order ID:", leftMargin, yPosition);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(ticket.order_id, leftMargin + 30, yPosition);
+      yPosition += 6;
+
+      // Ticket ID
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Ticket ID:", leftMargin, yPosition);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(ticket.id, leftMargin + 30, yPosition);
+      yPosition += 6;
+
+      // Purchase date
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Purchase Date:", leftMargin, yPosition);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(
+        new Date(ticket.created_at).toLocaleDateString(),
+        leftMargin + 30,
+        yPosition
+      );
+      yPosition += 6;
+
+      // Ticket status
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Status:", leftMargin, yPosition);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(ticket.used ? "Used" : "Active", leftMargin + 30, yPosition);
+      yPosition += 15;
+
+      // Add QR code - This is the most reliable method
+      try {
+        // Find the QR code container
+        const qrCodeContainer = document.querySelector(
+          ".bg-white.p-4.border-2.border-gray-200.rounded-md"
+        );
+
+        if (qrCodeContainer) {
+          addDebugMessage("QR code container found");
+
+          // Capture QR code as image
+          const canvas = await html2canvas(qrCodeContainer, {
+            scale: 4, // High resolution
+            backgroundColor: "#ffffff",
+            logging: false,
+          });
+
+          addDebugMessage("QR code captured to canvas");
+
+          // Convert to data URL
+          const qrDataUrl = canvas.toDataURL("image/png");
+
+          // Center the QR code
+          const qrWidth = 70; // mm - larger size for better scanning
+          const qrHeight = 70; // mm
+          const qrX = (pageWidth - qrWidth) / 2;
+
+          // Add QR Code to PDF
+          pdf.addImage(qrDataUrl, "PNG", qrX, yPosition, qrWidth, qrHeight);
+          yPosition += qrHeight + 5;
+
+          // Add QR code text
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(10);
+          pdf.setTextColor(100, 100, 100);
+          pdf.text(
+            "Scan QR code for ticket validation",
+            pageWidth / 2,
+            yPosition,
+            { align: "center" }
+          );
+          yPosition += 10;
+
+          addDebugMessage("QR code added to PDF");
+        } else {
+          addDebugMessage("QR code container not found");
+          throw new Error("QR code container not found in the DOM");
+        }
+      } catch (qrError) {
+        addDebugMessage(
+          `Error capturing QR code: ${qrError instanceof Error ? qrError.message : String(qrError)}`
+        );
+        console.error("Error capturing QR code:", qrError);
+
+        // Create a fallback QR code with text
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(12);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text("TICKET ID FOR VALIDATION:", pageWidth / 2, yPosition + 15, {
+          align: "center",
+        });
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(14);
+        pdf.text(ticket.id, pageWidth / 2, yPosition + 25, { align: "center" });
+        yPosition += 35;
+      }
+
+      // Add footer with legal text
+      yPosition = 270; // Near bottom of page
+      pdf.setFont("helvetica", "italic");
+      pdf.setFontSize(8);
+      pdf.setTextColor(150, 150, 150);
+      pdf.text(
+        "This ticket is subject to the terms and conditions of the event organizer.",
+        leftMargin,
+        yPosition
+      );
+      pdf.text(
+        `Generated on ${new Date().toLocaleString()}`,
+        leftMargin,
+        yPosition + 4
+      );
+
+      // Add ticket border
+      pdf.setDrawColor(65, 105, 225); // Blue border
+      pdf.setLineWidth(0.5);
+      pdf.rect(5, 5, pageWidth - 10, 287); // A4 height is 297mm
+
+      // Save the PDF
+      pdf.save(`${ticket.event.title.replace(/\s+/g, "-")}-Ticket.pdf`);
+
+      // Reset button state
+      if (downloadButton) {
+        downloadButton.innerHTML =
+          '<svg class="h-4 w-4 mr-2" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg> Download Ticket';
+        downloadButton.removeAttribute("disabled");
+      }
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      addDebugMessage(
+        `Error generating PDF: ${error instanceof Error ? error.message : String(error)}`
+      );
+      alert("Failed to generate PDF. Please try again.");
+
+      // Reset button state on error
+      const downloadButton = document.getElementById("download-button");
+      if (downloadButton) {
+        downloadButton.innerHTML =
+          '<svg class="h-4 w-4 mr-2" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg> Download Ticket';
+        downloadButton.removeAttribute("disabled");
+      }
+    }
   };
 
   useEffect(() => {
@@ -265,7 +541,7 @@ export default function TicketDetailPage({
       <div className="grid md:grid-cols-5 gap-8">
         {/* Left column - Ticket info */}
         <div className="md:col-span-3 space-y-6">
-          <Card>
+          <Card ref={ticketRef}>
             <CardHeader className="bg-blue-500 text-white py-6">
               <div className="flex items-center space-x-2">
                 <TicketIcon />
@@ -393,14 +669,12 @@ export default function TicketDetailPage({
             <CardContent className="pt-6">
               <div className="flex flex-col items-center justify-center space-y-4">
                 <div className="bg-white p-4 border-2 border-gray-200 rounded-md">
-                  {/* Placeholder for QR code */}
-                  <div className="w-48 h-48 bg-gray-200 flex items-center justify-center">
-                    <p className="text-gray-600 text-center p-4">
-                      QR code for ticket
-                      <br />
-                      ID: {ticket.id.substring(0, 8)}
-                    </p>
-                  </div>
+                  <QRCode
+                    value={`${process.env.NEXT_PUBLIC_BASE_URL || window.location.origin}/ticket-validation/${ticket.id}`}
+                    size={192}
+                    level="H"
+                    className="mx-auto"
+                  />
                 </div>
                 <p className="text-sm text-center text-gray-500">
                   Present this QR code at the event entrance
@@ -409,7 +683,12 @@ export default function TicketDetailPage({
             </CardContent>
 
             <CardFooter className="flex-col space-y-3">
-              <Button className="w-full" variant="outline">
+              <Button
+                id="download-button"
+                className="w-full"
+                variant="outline"
+                onClick={handleDownloadPDF}
+              >
                 <Download className="h-4 w-4 mr-2" />
                 Download Ticket
               </Button>

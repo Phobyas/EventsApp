@@ -15,6 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { TicketPurchaseButton } from "@/components/tickets/TicketPurchaseButton";
 
 interface Event {
   id: string;
@@ -228,10 +229,10 @@ export default function EventPage({ params }: { params: { id: string } }) {
               </CardHeader>
               <CardContent>
                 {event.ticket_types && event.ticket_types.length > 0 ? (
-                  <EventTicketPurchaseForm
+                  <TicketPurchaseButton
                     eventId={event.id}
                     eventTitle={event.title}
-                    ticketTypes={event.ticket_types}
+                    ticketTypes={event.ticket_types || []}
                     onPurchaseComplete={fetchEvent}
                   />
                 ) : (
